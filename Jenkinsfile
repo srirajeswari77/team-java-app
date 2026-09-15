@@ -41,23 +41,6 @@ pipeline {
             }
         }
 
-        stage('Check ECR Image') {
-            steps {
-                sh '''
-                    echo "Checking ECR image..."
-                    echo "Repository: ${IMAGE_NAME}"
-                    echo "Selected tag: ${IMAGE_TAG}"
-
-                    aws ecr describe-images \
-                        --repository-name ${ECR_REPOSITORY} \
-                        --image-ids imageTag=${IMAGE_TAG} \
-                        --region ${AWS_REGION} \
-                        --query 'imageDetails[0].imageDigest' \
-                        --output text
-                '''
-            }
-        }
-
         stage('Maven Build') {
             when {
                 expression {
@@ -84,6 +67,11 @@ pipeline {
         }
 
         stage('ECR Login') {
+            when {
+                expression {
+                    return params.ENVIRONMENT == 'DEV'
+                }
+            }
             steps {
                 sh '''
                     aws ecr get-login-password \
@@ -123,10 +111,12 @@ pipeline {
             }
         }
 
-        stage('Verify Image Digest') {
+        stage('Check ECR Image') {
             steps {
                 sh '''
-                    echo "Verifying selected ECR image..."
+                    echo "Checking ECR image..."
+                    echo "Repository: ${IMAGE_NAME}"
+                    echo "Selected tag: ${IMAGE_TAG}"
 
                     aws ecr describe-images \
                         --repository-name ${ECR_REPOSITORY} \
@@ -153,13 +143,61 @@ pipeline {
                         targetHost = env.PROD_HOST
                     }
 
-                    echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to ${params.ENVIRONMENT}"
-                    echo "Target host: ${targetHost}"
+                    echo "=========================================="
+                    echo "Deploying Application"
+                    echo "Environment : ${params.ENVIRONMENT}"
+                    echo "Image Tag   : ${params.IMAGE_TAG}"
+                    echo "Target Host : ${targetHost}"
+                    echo "Image       : ${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "=========================================="
 
-                    /*
-                     * Deployment command will be added after
-                     * Jenkins SSH credentials are configured.
-                     */
+                    sshagent(credentials: ['ec2-deploy-key']) {
+
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ubuntu@${targetHost} '
+                                set -e
+
+                                echo "Logging in to Amazon ECR..."
+
+                                aws ecr get-login-password \
+                                    --region ${AWS_REGION} |
+                                docker login \
+                                    --username AWS \
+                                    --password-stdin ${ECR_REGISTRY}
+
+                                echo "Pulling image..."
+
+                                docker pull ${IMAGE_NAME}:${IMAGE_TAG}
+
+                                echo "Removing existing container if present..."
+
+                                docker rm -f devops-demo-app-${params.ENVIRONMENT} 2>/dev/null || true
+
+                                echo "Starting new container..."
+
+                                docker run -d \
+                                    --name devops-demo-app-${params.ENVIRONMENT} \
+                                    -p 8080:8080 \
+                                    ${IMAGE_NAME}:${IMAGE_TAG}
+
+                                echo "Waiting for application to start..."
+
+                                sleep 5
+
+                                echo "Checking container..."
+
+                                docker ps \
+                                    --filter name=devops-demo-app-${params.ENVIRONMENT}
+
+                                echo "Checking application response..."
+
+                                curl -f http://localhost:8080
+
+                                echo ""
+                                echo "Deployment completed successfully."
+                            '
+                        """
+                    }
                 }
             }
         }
@@ -167,10 +205,12 @@ pipeline {
 
     post {
         success {
+            echo "=========================================="
             echo "Pipeline completed successfully."
-            echo "IMAGE_TAG: ${IMAGE_TAG}"
-            echo "ENVIRONMENT: ${ENVIRONMENT}"
-            echo "Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "IMAGE_TAG   : ${IMAGE_TAG}"
+            echo "ENVIRONMENT : ${ENVIRONMENT}"
+            echo "IMAGE       : ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "=========================================="
         }
 
         failure {
