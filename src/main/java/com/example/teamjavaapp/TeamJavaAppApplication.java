@@ -15,6 +15,6 @@ public class TeamJavaAppApplication {
 
     @GetMapping("/")
     public String home() {
-        return "Hello from team-java-app version 1.1!";
+        return "Hello from team-java-app version 1.2!";
     }
 }
