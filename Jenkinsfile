@@ -182,7 +182,13 @@ pipeline {
 
                                 echo "Waiting for application to start..."
 
-                                sleep 5
+                                for i in {1..12}; do
+    if curl -f http://localhost:8080; then
+        break
+    fi
+    echo "Application not ready yet. Waiting..."
+    sleep 2
+done
 
                                 echo "Checking container..."
 
